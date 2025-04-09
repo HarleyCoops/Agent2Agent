@@ -1,0 +1,9 @@
+1. this is a new protocol called Agent2Agent, lets explore this and build demos based on the full draft specs and working demos.
+2. access the full draft docs https://github.com/google/A2A to build a verbose readme
+3. code is herehttps://google.github.io/A2A/#/
+4. we have a new google_adk here: https://github.com/google/A2A/tree/main/samples/python/agents/google_adk
+5. additional details here: https://github.com/google/A2A/blob/main/samples/python/hosts/README.md
+6. and we have a local fork here: https://github.com/HarleyCoops/A2A.git
+7.
+8. use all your tools, MCP access and creativity to accomplish this documentation and demo building task.
+9. pay special attention to the LangGraph implementation: https://github.com/HarleyCoops/A2A/blob/main/samples/python/agents/langgraph/README.md
