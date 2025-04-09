@@ -23,7 +23,8 @@ setup(
         "requests>=2.31.0",
         "sse-starlette>=1.6.5",
         "python-multipart>=0.0.6",
-        "sseclient-py>=1.7.2"
+        "sseclient-py>=1.7.2",
+        "sentry-sdk>=1.40.0"
     ],
     python_requires=">=3.9",
     entry_points={

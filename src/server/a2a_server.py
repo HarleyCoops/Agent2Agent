@@ -6,6 +6,7 @@ import os
 import json
 import asyncio
 import uuid
+import traceback
 from typing import Dict, List, Optional, Any, Union, AsyncGenerator
 from datetime import datetime
 from dotenv import load_dotenv
@@ -14,6 +15,9 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
+
+# Import Sentry utilities
+from ..utils.sentry import capture_exception, capture_message, set_tag, set_context
 
 from .a2a_models import (
     AgentCard, AgentCapabilities, AgentSkill, AgentProvider,
@@ -33,11 +37,11 @@ sessions: Dict[str, Dict[str, AgentState]] = {}
 
 class A2AServer:
     """A2A server implementation."""
-    
+
     def __init__(self):
         """Initialize the A2A server."""
         self.app = FastAPI(title="A2A LangGraph Server")
-        
+
         # Add CORS middleware
         self.app.add_middleware(
             CORSMiddleware,
@@ -46,17 +50,17 @@ class A2AServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        
+
         # Register routes
         self.app.post("/")(self.handle_jsonrpc)
-    
+
     async def handle_jsonrpc(self, request: Request) -> JSONResponse:
         """Handle JSON-RPC requests."""
         try:
             # Parse request
             data = await request.json()
             jsonrpc_request = JSONRPCRequest(**data)
-            
+
             # Route to appropriate handler
             if jsonrpc_request.method == "agent/getCard":
                 result = self.get_agent_card()
@@ -67,7 +71,7 @@ class A2AServer:
                         result=result
                     ).dict(exclude_none=True)
                 )
-            
+
             elif jsonrpc_request.method == "tasks/send":
                 params = TaskSendParams(**jsonrpc_request.params)
                 result = await self.process_task(params)
@@ -78,11 +82,11 @@ class A2AServer:
                         result=result
                     ).dict(exclude_none=True)
                 )
-            
+
             elif jsonrpc_request.method == "tasks/sendSubscribe":
                 params = TaskSendParams(**jsonrpc_request.params)
                 return EventSourceResponse(self.stream_task(params, jsonrpc_request.id))
-            
+
             elif jsonrpc_request.method == "tasks/get":
                 params = TaskQueryParams(**jsonrpc_request.params)
                 result = self.get_task(params)
@@ -93,7 +97,7 @@ class A2AServer:
                         result=result
                     ).dict(exclude_none=True)
                 )
-            
+
             elif jsonrpc_request.method == "tasks/cancel":
                 params = TaskIdParams(**jsonrpc_request.params)
                 result = self.cancel_task(params)
@@ -104,7 +108,7 @@ class A2AServer:
                         result=result
                     ).dict(exclude_none=True)
                 )
-            
+
             else:
                 # Method not found
                 return JSONResponse(
@@ -119,8 +123,27 @@ class A2AServer:
                     ).dict(exclude_none=True),
                     status_code=404
                 )
-        
+
         except Exception as e:
+            # Capture exception with Sentry
+            error_id = capture_exception(e)
+
+            # Log error details
+            error_details = {
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "error_id": error_id
+            }
+
+            # Set context for Sentry
+            set_context("request", {
+                "method": getattr(jsonrpc_request, "method", "unknown"),
+                "id": getattr(jsonrpc_request, "id", "unknown")
+            })
+
+            # Log error message
+            print(f"Error processing request: {str(e)}")
+
             # Internal error
             return JSONResponse(
                 content=JSONRPCResponse(
@@ -129,12 +152,15 @@ class A2AServer:
                     error=JSONRPCError(
                         code=-32603,
                         message="Internal error",
-                        data={"error": str(e)}
+                        data={
+                            "error": str(e),
+                            "error_id": error_id
+                        }
                     ).dict(exclude_none=True)
                 ).dict(exclude_none=True),
                 status_code=500
             )
-    
+
     def get_agent_card(self) -> AgentCard:
         """Get the agent card."""
         return AgentCard(
@@ -172,32 +198,32 @@ class A2AServer:
                 )
             ]
         )
-    
+
     def get_or_create_session(self, session_id: str) -> Dict[str, AgentState]:
         """Get or create a session."""
         if session_id not in sessions:
             sessions[session_id] = {}
         return sessions[session_id]
-    
+
     def get_or_create_task_state(self, session_id: str, task_id: str) -> AgentState:
         """Get or create a task state."""
         session = self.get_or_create_session(session_id)
         if task_id not in session:
             session[task_id] = AgentState()
         return session[task_id]
-    
+
     async def process_task(self, params: TaskSendParams) -> Task:
         """Process a task."""
         # Get or create task state
         state = self.get_or_create_task_state(params.sessionId, params.id)
-        
+
         # Add user message to state
         user_content = next((part.text for part in params.message.parts if part.type == "text"), "")
         state.add_user_message(user_content)
-        
+
         # Run the graph
         result = await agent_graph.ainvoke(state)
-        
+
         # Convert result to A2A Task
         task = Task(
             id=params.id,
@@ -207,7 +233,7 @@ class A2AServer:
             ),
             history=[]
         )
-        
+
         # If completed, add artifacts
         if result.task_state == "completed" and result.final_response:
             task.artifacts = [
@@ -216,7 +242,7 @@ class A2AServer:
                     index=0
                 )
             ]
-        
+
         # If input required, add message to status
         if result.task_state == "input-required":
             assistant_message = result.get_last_assistant_message()
@@ -225,18 +251,18 @@ class A2AServer:
                     role="agent",
                     parts=[Part(type="text", text=assistant_message)]
                 )
-        
+
         return task
-    
+
     async def stream_task(self, params: TaskSendParams, request_id: Any) -> AsyncGenerator[str, None]:
         """Stream a task."""
         # Get or create task state
         state = self.get_or_create_task_state(params.sessionId, params.id)
-        
+
         # Add user message to state
         user_content = next((part.text for part in params.message.parts if part.type == "text"), "")
         state.add_user_message(user_content)
-        
+
         # Initial working state
         yield self.format_sse_event(JSONRPCResponse(
             jsonrpc="2.0",
@@ -254,7 +280,7 @@ class A2AServer:
                 final=False
             )
         ).dict(exclude_none=True))
-        
+
         # Run the graph with streaming
         async for intermediate_state in agent_graph.astream(state):
             # Yield intermediate updates if available
@@ -277,10 +303,10 @@ class A2AServer:
                     )
                 ).dict(exclude_none=True))
                 await asyncio.sleep(0.5)  # Add a small delay for better streaming experience
-        
+
         # Get final state
         final_state = sessions[params.sessionId][params.id]
-        
+
         # If completed, yield artifact
         if final_state.task_state == "completed" and final_state.final_response:
             yield self.format_sse_event(JSONRPCResponse(
@@ -295,7 +321,7 @@ class A2AServer:
                     )
                 )
             ).dict(exclude_none=True))
-        
+
         # Yield final completion
         yield self.format_sse_event(JSONRPCResponse(
             jsonrpc="2.0",
@@ -309,20 +335,20 @@ class A2AServer:
                 final=True
             )
         ).dict(exclude_none=True))
-    
+
     def get_task(self, params: TaskQueryParams) -> Task:
         """Get a task."""
         # Check if session exists
         if params.sessionId not in sessions:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         # Check if task exists
         if params.id not in sessions[params.sessionId]:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+
         # Get task state
         state = sessions[params.sessionId][params.id]
-        
+
         # Convert state to A2A Task
         task = Task(
             id=params.id,
@@ -332,7 +358,7 @@ class A2AServer:
             ),
             history=[]
         )
-        
+
         # If completed, add artifacts
         if state.task_state == "completed" and state.final_response:
             task.artifacts = [
@@ -341,7 +367,7 @@ class A2AServer:
                     index=0
                 )
             ]
-        
+
         # If input required, add message to status
         if state.task_state == "input-required":
             assistant_message = state.get_last_assistant_message()
@@ -350,26 +376,26 @@ class A2AServer:
                     role="agent",
                     parts=[Part(type="text", text=assistant_message)]
                 )
-        
+
         return task
-    
+
     def cancel_task(self, params: TaskIdParams) -> Task:
         """Cancel a task."""
         # Check if session exists
         if params.sessionId not in sessions:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         # Check if task exists
         if params.id not in sessions[params.sessionId]:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+
         # Get task state
         state = sessions[params.sessionId][params.id]
-        
+
         # Update task state
         state.task_state = "canceled"
         state.last_updated = datetime.now().isoformat()
-        
+
         # Convert state to A2A Task
         task = Task(
             id=params.id,
@@ -379,9 +405,9 @@ class A2AServer:
             ),
             history=[]
         )
-        
+
         return task
-    
+
     @staticmethod
     def format_sse_event(data: Any) -> str:
         """Format data for SSE."""

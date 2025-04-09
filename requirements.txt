@@ -9,3 +9,5 @@ google-generativeai>=0.3.0
 requests>=2.31.0
 sse-starlette>=1.6.5
 python-multipart>=0.0.6
+sentry-sdk>=1.40.0
+sseclient-py>=1.7.2
