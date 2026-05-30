@@ -11,7 +11,7 @@ dependencies = [
     "pydantic>=2.10.6",
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
-    "mesop>=1.0.0",
+    "mesop>=1.2.5",
     "a2a-samples",
     "pandas>=2.2.0",
     "google-genai>=1.9.0",
