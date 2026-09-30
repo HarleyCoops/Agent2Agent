@@ -20,7 +20,7 @@ dependencies = [
     "uvicorn>=0.34.0",
     "google-adk>=0.0.3",
     "jwcrypto>=1.5.7",
-    "pyjwt>=2.13.0",
+    "pyjwt>=2.15.0",
 ]
 
 [tool.hatch.build.targets.wheel]
